@@ -15,7 +15,7 @@ set_basic_log_config()
 
 def parse_args(in_args=None):
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument('--task_name', type=str, required=True,
+    arg_parser.add_argument('--task_name', type=str, default='dee',
                             help='Take Name')
     arg_parser.add_argument('--data_dir', type=str, default='./Data',
                             help='Data directory')
@@ -37,7 +37,7 @@ def parse_args(in_args=None):
         else:
             arg_parser.add_argument('--'+key, type=type(val), default=val)
 
-    arg_info = arg_parser.parse_args(args=in_args)
+    arg_info = arg_parser.parse_args()
 
     return arg_info
 

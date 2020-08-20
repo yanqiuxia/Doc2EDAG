@@ -48,8 +48,8 @@ def set_basic_log_config():
 class BERTChineseCharacterTokenizer(BertTokenizer):
     """Customized tokenizer for Chinese financial announcements"""
 
-    def __init__(self, vocab_file, do_lower_case=True):
-        super(BERTChineseCharacterTokenizer, self).__init__(vocab_file, do_lower_case)
+    def __init__(self, vocab_file, do_lower_case=True, max_len=None):
+        super(BERTChineseCharacterTokenizer, self).__init__(vocab_file, do_lower_case, max_len)
 
     def char_tokenize(self, text, unk_token='[UNK]'):
         """perform pure character-based tokenization"""

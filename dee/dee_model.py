@@ -362,6 +362,8 @@ class Doc2EDAGModel(nn.Module):
         span_context_list, doc_sent_context = self.get_doc_span_sent_context(
             doc_token_emb, doc_sent_emb, doc_fea, doc_span_info,
         )
+        #span_context_list [num_mentions, hidden_size]
+        # doc_sent_context [sent_num,hidden_size]
         if len(span_context_list) == 0:
             raise Exception('Error: doc_fea.ex_idx {} does not have valid span'.format(doc_fea.ex_idx))
 
@@ -387,6 +389,7 @@ class Doc2EDAGModel(nn.Module):
                         event_idx, field_idx, prev_decode_context, batch_span_context
                     )
                     # prepare label for candidate spans
+                    # batch_cand_emb [num_mentions, hidden_size]
                     batch_span_label = get_batch_span_label(
                         num_spans, set(), batch_span_context.device
                     )
@@ -576,13 +579,14 @@ class Doc2EDAGModel(nn.Module):
             ner_token_ids, ner_token_masks, label_ids=ner_token_labels,
             train_flag=train_flag, decode_flag=not use_gold_span,
         )
+        # ner_token_emb [batch_size*sent_num, sen_len,hidden_size]
 
         if use_gold_span:  # definitely use gold span info
             ner_token_types = ner_token_labels
         else:
             ner_token_types = ner_token_preds
 
-        # get sentence embedding
+        # get sentence embedding [batch_size*sent_num,hidden_size]
         ner_sent_emb = self.get_batch_sent_emb(ner_token_emb, ner_token_masks, valid_sent_num_list)
 
         assert sum(valid_sent_num_list) == ner_token_emb.size(0) == ner_sent_emb.size(0)

@@ -21,13 +21,13 @@ from .dee_model import Doc2EDAGModel, DCFEEModel
 class DEETaskSetting(TaskSetting):
     base_key_attrs = TaskSetting.base_key_attrs
     base_attr_default_pairs = [
-        ('train_file_name', 'train.json'),
+        ('train_file_name', 'dev.json'),
         ('dev_file_name', 'dev.json'),
         ('test_file_name', 'test.json'),
-        ('summary_dir_name', '/tmp/Summary'),
+        ('summary_dir_name', './tmp/Summary'),
         ('max_sent_len', 128),
-        ('max_sent_num', 64),
-        ('train_batch_size', 64),
+        ('max_sent_num', 10),
+        ('train_batch_size', 8),
         ('gradient_accumulation_steps', 8),
         ('eval_batch_size', 2),
         ('learning_rate', 1e-4),
@@ -86,8 +86,6 @@ class DEETask(BasePytorchTask):
         # get entity and event label name
         self.entity_label_list = DEEExample.get_entity_label_list()
         self.event_type_fields_pairs = DEEExample.get_event_type_fields_pairs()
-
-        # build example loader
         self.example_loader_func = DEEExampleLoader(self.setting.rearrange_sent, self.setting.max_sent_len)
 
         # build feature converter

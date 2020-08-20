@@ -7,12 +7,12 @@ from torch import nn
 import torch.nn.functional as F
 import math
 
-from pytorch_pretrained_bert.modeling import PreTrainedBertModel, BertModel
+from pytorch_pretrained_bert.modeling import BertModel
 
 from . import transformer
 
 
-class BertForBasicNER(PreTrainedBertModel):
+class BertForBasicNER():
     """BERT model for basic NER functionality.
     This module is composed of the BERT model with a linear layer on top of
     the output sequences.

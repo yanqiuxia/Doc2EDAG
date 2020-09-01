@@ -52,7 +52,7 @@ class TaskSetting(object):
         ('no_cuda', False),
         ('local_rank', -1),
         ('seed', 99),
-        ('gradient_accumulation_steps', 1),
+        ('gradient_accumulation_steps', 4),
         ('optimize_on_cpu', False),
         ('fp16', False),
         ('loss_scale', 128),

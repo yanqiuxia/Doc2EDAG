@@ -51,7 +51,16 @@ def get_doc_span_info_list(doc_token_types_list, doc_fea_list, use_gold_span=Fal
         span_mention_range_list, mention_drange_list, mention_type_list = get_span_mention_info(
             span_dranges_list, doc_token_type_mat
         )
-
+        '''
+        span_mention_range_list：同一个mention 在mention_drange_list跨度范围，同一个mention在文章中可能出现多次，而且可能有不同的表达式
+        mention_drange_list：文章所有mention的 sent_idx span范围
+        mention_type_list：文章所有mention的类别
+        '''
+        '''
+        span_token_tup_list: mention 所对应的token_id 长度同span_mention_range_list长度一样
+        span_dranges_list：
+        event_dag_info：id 为span_token_tup_list的id span_id路径信息 event_idx -> field_idx -> pre_path -> cur_span_idx_set
+        '''
         # generate event decoding dag graph for model training
         event_dag_info, _, missed_sent_idx_list = doc_fea.generate_dag_info_for(span_token_tup_list, return_miss=True)
 
@@ -172,6 +181,18 @@ class Doc2EDAGModel(nn.Module):
         return total_sent_emb
 
     def get_doc_span_sent_context(self, doc_token_emb, doc_sent_emb, doc_fea, doc_span_info):
+        '''
+
+        :param doc_token_emb:[sent_num,sent_len,hidden_size]
+        :param doc_sent_emb:[sent_num,hidden_size]
+        :param doc_fea:
+        :param doc_span_info:
+        :return:
+        '''
+        '''
+        获取文章所有mention 嵌入，加入句子位置嵌入以及实体类型嵌入。长度和mention_drange_list一样
+        doc_mention_emb：[num_mentions,hidden_size]
+        '''
         doc_mention_emb = self.get_doc_span_mention_emb(doc_token_emb, doc_span_info)
 
         # only consider actual sentences
@@ -194,9 +215,11 @@ class Doc2EDAGModel(nn.Module):
 
                 # size = [num_mentions+num_valid_sents, hidden_size]
                 # here we do not need mask
+                #使用transformer-2 编码实体和句子之间关系
                 total_ment_sent_context = self.doc_context_encoder(total_ment_sent_emb, None).squeeze(0)
 
                 # collect span context
+                #span_mention_range_list  同一个mention 在mention_drange_list跨度范围，同一个mention在文章中可能出现多次，使用最大池化获取多个mention的上下文信息。
                 for mid_s, mid_e in doc_span_info.span_mention_range_list:
                     assert mid_e <= num_mentions
                     multi_ment_context = total_ment_sent_context[mid_s:mid_e]  # [num_mentions, hidden_size]
@@ -210,7 +233,7 @@ class Doc2EDAGModel(nn.Module):
                         span_context = multi_ment_context.mean(dim=0, keepdim=True)
                     else:
                         raise Exception('Unknown seq_reduce_type {}'.format(self.config.seq_reduce_type))
-
+                    #span_context [1,hidden_size]
                     span_context_list.append(span_context)
 
                 # collect sent context
@@ -258,6 +281,18 @@ class Doc2EDAGModel(nn.Module):
 
     def get_field_cls_info(self, event_idx, field_idx, batch_span_emb,
                            batch_span_label=None, train_flag=True):
+        '''
+
+        :param event_idx:
+        :param field_idx:
+        :param batch_span_emb:
+        :param batch_span_label:
+        :param train_flag:
+        :return:
+        '''
+        '''
+        计算当前cand_span与当前field logits
+        '''
         batch_span_logp = self.get_field_pred_logp(event_idx, field_idx, batch_span_emb)
 
         if train_flag:
@@ -301,7 +336,7 @@ class Doc2EDAGModel(nn.Module):
         if self.config.use_path_mem:
             # [1, num_spans + valid_sent_num, hidden_size]
             total_cand_emb = torch.cat([batch_cand_emb, prev_decode_context], dim=0).unsqueeze(0)
-            # use transformer to do the reasoning
+            # use transformer to do the reasoning transformer-3编码 transformer-3编码候选span和memmory-tensor
             total_cand_emb = self.field_context_encoder(total_cand_emb, None).squeeze(0)
             batch_cand_emb = total_cand_emb[:num_spans, :]
         # TODO: what if reasoning over reasoning context
@@ -359,19 +394,34 @@ class Doc2EDAGModel(nn.Module):
         return field_mle_loss_list
 
     def get_loss_on_doc(self, doc_token_emb, doc_sent_emb, doc_fea, doc_span_info):
+        '''
+
+        :param doc_token_emb:
+        :param doc_sent_emb:
+        :param doc_fea:
+        :param doc_span_info:
+        :return:
+        '''
+        '''
+        采用transformer-2编码实体和句子之间的关系，并且同一mention在文章不同位置采用最大池化获取特征。
+        span_context_list：[num_mentions,hidden_size] num_mentions和span_mention_range_list长度一致，指的是唯一标识的mention。
+        doc_sent_context: [sent_num,hidden_size]
+        
+        '''
         span_context_list, doc_sent_context = self.get_doc_span_sent_context(
             doc_token_emb, doc_sent_emb, doc_fea, doc_span_info,
         )
         #span_context_list [num_mentions, hidden_size]
-        # doc_sent_context [sent_num,hidden_size]
+        # doc_sent_context [sent_num, hidden_size]
         if len(span_context_list) == 0:
             raise Exception('Error: doc_fea.ex_idx {} does not have valid span'.format(doc_fea.ex_idx))
-
+        #batch_span_context [num_mentions, hidden_size]
         batch_span_context = torch.cat(span_context_list, dim=0)
         num_spans = len(span_context_list)
+        #event_idx2field_idx2pre_path2cur_span_idx_set [file_nums,(pre_path:cur_span_idx_set)]
         event_idx2field_idx2pre_path2cur_span_idx_set = doc_span_info.event_dag_info
 
-        # 1. get event type classification loss
+        # 1. get event type classification loss 多标签分类
         event_cls_loss = self.get_event_cls_info(doc_sent_context, doc_fea, train_flag=True)
 
         # 2. for each event type, get field classification loss
@@ -381,13 +431,15 @@ class Doc2EDAGModel(nn.Module):
             if event_label == 0:
                 # treat all spans as invalid arguments for that event,
                 # because we need to use all parameters to support distributed training
+                #memory tensor预先使用句子向量信息 [sent_num,hidden_size]
                 prev_decode_context = doc_sent_context
                 num_fields = self.event_tables[event_idx].num_fields
                 for field_idx in range(num_fields):
-                    # conduct reasoning on this field
+                    # conduct reasoning on this field transformer-3编码span和 memory tensor
                     batch_cand_emb, prev_decode_context = self.conduct_field_level_reasoning(
                         event_idx, field_idx, prev_decode_context, batch_span_context
                     )
+                    #batch_cand_emb size与batch_span_context一样
                     # prepare label for candidate spans
                     # batch_cand_emb [num_mentions, hidden_size]
                     batch_span_label = get_batch_span_label(
@@ -621,11 +673,20 @@ class Doc2EDAGModel(nn.Module):
             else:
                 use_gold_span = False
 
-        # get doc token-level local context
+        # get doc token-level local context,采用ner编码获取句子内实体识别loss，以及获取句子向量加入句子位置特征
         doc_token_emb_list, doc_token_masks_list, doc_token_types_list, doc_sent_emb_list, doc_sent_loss_list = \
             self.get_local_context_info(
                 doc_batch_dict, train_flag=train_flag, use_gold_span=use_gold_span,
             )
+        '''
+        doc_token_emb_list：
+        doc_sent_emb_list：transformer-1编码之后的embedding
+        '''
+        # doc_token_emb_list [batch_size,max_sent_num,sen_len,hidden_size]
+        # doc_token_masks_list [batch_size,max_sent_num,sen_len]
+        # doc_token_types_list [batch_size,max_sent_num,sen_len] 训练随机选择真实标签还是预测标签，推理使用预测标签
+        # doc_sent_emb_list [batch_size,max_sent_num,hidden_size]
+        # doc_sent_loss_list [batch_size,max_sent_num]
 
         # get doc feature objects
         ex_idx_list = doc_batch_dict['ex_idx']
@@ -633,7 +694,16 @@ class Doc2EDAGModel(nn.Module):
 
         # get doc span-level info for event extraction
         doc_span_info_list = get_doc_span_info_list(doc_token_types_list, doc_fea_list, use_gold_span=use_gold_span)
-
+        # doc_span_info_list [batch_size,()]
+        '''
+        doc_span_info_list：包含下列字段值
+        event_dag_info: 有向无环图事件信息表  span_id 为span_token_tup_list的id， span_id路径信息 event_idx -> field_idx -> pre_path -> cur_span_idx_set
+        mention_drange_list: 文章所有mention的 (sent_idx span范围)
+        mention_type_list: 文章所有mention的类别， 长度和 mention_drange_list一样
+        span_dranges_list: 同一mention 所对应(sent_id span范围)，长度和span_token_tup_list一样
+        span_mention_range_list: 同一个mention 在mention_drange_list跨度范围，同一个mention在文章中可能出现多次，而且可能有不同的表达式
+        span_token_tup_list: mention 所对应的token_id， 长度同span_mention_range_list长度一样
+        '''
         if train_flag:
             doc_event_loss_list = []
             for batch_idx, ex_idx in enumerate(ex_idx_list):

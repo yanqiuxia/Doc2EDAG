@@ -418,7 +418,7 @@ class Doc2EDAGModel(nn.Module):
         #batch_span_context [num_mentions, hidden_size]
         batch_span_context = torch.cat(span_context_list, dim=0)
         num_spans = len(span_context_list)
-        #event_idx2field_idx2pre_path2cur_span_idx_set [file_nums,(pre_path:cur_span_idx_set)]
+        #event_idx2field_idx2pre_path2cur_span_idx_set [envent_nums, field_nums,(pre_path:cur_span_idx_set)]
         event_idx2field_idx2pre_path2cur_span_idx_set = doc_span_info.event_dag_info
 
         # 1. get event type classification loss 多标签分类
@@ -457,6 +457,9 @@ class Doc2EDAGModel(nn.Module):
 
                     all_field_loss_list.append(cur_field_cls_loss)
             else:
+                #field_idx2pre_path2cur_span_idx_set [field_nums,(pre_path:cur_span_idx_set)]
+                #doc_sent_context[sent_num, hidden_size]
+                #batch_span_context[num_spans, hidden_size]
                 field_idx2pre_path2cur_span_idx_set = event_idx2field_idx2pre_path2cur_span_idx_set[event_idx]
                 field_loss_list = self.get_field_mle_loss_list(
                     doc_sent_context, batch_span_context, event_idx, field_idx2pre_path2cur_span_idx_set,

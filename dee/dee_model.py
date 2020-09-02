@@ -447,7 +447,7 @@ class Doc2EDAGModel(nn.Module):
         event_idx2field_idx2pre_path2cur_span_idx_set = doc_span_info.event_dag_info
 
         # 1. get event type classification loss 多标签分类
-        #[1]函数里面求sum
+        #[1]函数里面求sum doc_sent_context: [sent_num,hidden_size]
         event_cls_loss = self.get_event_cls_info(doc_sent_context, doc_fea, train_flag=True)
 
         # 2. for each event type, get field classification loss
@@ -674,7 +674,7 @@ class Doc2EDAGModel(nn.Module):
         else:
             ner_token_types = ner_token_preds
 
-        # get sentence embedding [batch_size*sent_num,hidden_size]
+        # get sentence embedding [batch_size*sent_num,hidden_size],采用最大池化获取句子向量
         ner_sent_emb = self.get_batch_sent_emb(ner_token_emb, ner_token_masks, valid_sent_num_list)
 
         assert sum(valid_sent_num_list) == ner_token_emb.size(0) == ner_sent_emb.size(0)
@@ -723,7 +723,7 @@ class Doc2EDAGModel(nn.Module):
         doc_token_masks_list [batch_size,max_sent_num,sen_len]
         doc_token_types_list [batch_size,max_sent_num,sen_len] 训练随机选择真实标签还是预测标签，推理使用预测标签
         doc_sent_emb_list [batch_size,max_sent_num,hidden_size]
-        doc_sent_loss_list [batch_size,max_sent_num]m  每个句子的ner_loss
+        doc_sent_loss_list [batch_size,max_sent_num]  每个句子的ner_loss
         '''
         # get doc feature objects
         ex_idx_list = doc_batch_dict['ex_idx']

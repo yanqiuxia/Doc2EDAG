@@ -191,7 +191,7 @@ class Doc2EDAGModel(nn.Module):
         '''
         '''
         获取文章所有mention 嵌入，加入句子位置嵌入以及实体类型嵌入。长度和mention_drange_list一样
-        doc_mention_emb：[num_mentions,hidden_size]
+        doc_mention_emb：[num_mentions,hidden_size] 文章所有mentions
         '''
         doc_mention_emb = self.get_doc_span_mention_emb(doc_token_emb, doc_span_info)
 
@@ -264,7 +264,7 @@ class Doc2EDAGModel(nn.Module):
         doc_event_logps = []
         for event_idx, event_label in enumerate(doc_fea.event_type_labels):
             event_table = self.event_tables[event_idx]
-            cur_event_logp = event_table(sent_context_emb=sent_context_emb)  # [1, hidden_size]
+            cur_event_logp = event_table(sent_context_emb=sent_context_emb)  # [1, 2]
             doc_event_logps.append(cur_event_logp)
         doc_event_logps = torch.cat(doc_event_logps, dim=0)  # [num_event_types, 2]
 
@@ -283,15 +283,16 @@ class Doc2EDAGModel(nn.Module):
                            batch_span_label=None, train_flag=True):
         '''
 
-        :param event_idx:
-        :param field_idx:
-        :param batch_span_emb:
-        :param batch_span_label:
+        :param event_idx:事件类型id
+        :param field_idx:事件角色类型id
+        :param batch_span_emb:[num_spans,hidden_size]
+        :param batch_span_label:[num_spans]
         :param train_flag:
         :return:
         '''
         '''
         计算当前cand_span与当前field logits
+        batch_span_logp:[num_spans,2] 角色分类是一个二分类 0-代表不是该角色， 1-代表是该角色
         '''
         batch_span_logp = self.get_field_pred_logp(event_idx, field_idx, batch_span_emb)
 
@@ -303,6 +304,9 @@ class Doc2EDAGModel(nn.Module):
             class_weight = torch.tensor(
                 [self.config.neg_field_loss_scaling, 1.0], device=device, dtype=data_type, requires_grad=False
             )
+            '''
+            field_cls_loss:[num_spans]
+            '''
             field_cls_loss = F.nll_loss(batch_span_logp, batch_span_label, weight=class_weight, reduction='sum')
             return field_cls_loss, batch_span_logp
         else:
@@ -336,7 +340,7 @@ class Doc2EDAGModel(nn.Module):
         if self.config.use_path_mem:
             # [1, num_spans + valid_sent_num, hidden_size]
             total_cand_emb = torch.cat([batch_cand_emb, prev_decode_context], dim=0).unsqueeze(0)
-            # use transformer to do the reasoning transformer-3编码 transformer-3编码候选span和memmory-tensor
+            # use transformer to do the reasoning transformer-3编码 候选span和memmory-tensor
             total_cand_emb = self.field_context_encoder(total_cand_emb, None).squeeze(0)
             batch_cand_emb = total_cand_emb[:num_spans, :]
         # TODO: what if reasoning over reasoning context
@@ -344,9 +348,17 @@ class Doc2EDAGModel(nn.Module):
 
     def get_field_mle_loss_list(self, doc_sent_context, batch_span_context,
                                 event_idx, field_idx2pre_path2cur_span_idx_set):
+        '''
+        :param doc_sent_context: [sent_num, hidden_size]
+        :param batch_span_context: [num_spans, hidden_size]
+        :param event_idx: [1]
+        :param field_idx2pre_path2cur_span_idx_set: [field_nums,(pre_path:cur_span_idx_set)]
+        :return: field_mle_loss_list: ?
+        '''
         field_mle_loss_list = []
         num_fields = self.event_tables[event_idx].num_fields
         num_spans = batch_span_context.size(0)
+        #初始化解码上下文向量采用句子向量 [sent_num, hidden_size]
         prev_path2prev_decode_context = {
             (): doc_sent_context
         }
@@ -359,15 +371,27 @@ class Doc2EDAGModel(nn.Module):
                     continue
                 # get decoding context
                 prev_decode_context = prev_path2prev_decode_context[prev_path]
-                # conduct reasoning on this field
+
+                '''
+                batch_cand_emb size与batch_span_context一样 
+                batch_cand_emb [num_spans, hidden_size]
+                prev_decode_context:[num_spans+decode_spans, hidden_size]
+                conduct reasoning on this field transformer-3编码span和 当前memory tensor,
+                获取transformer-3编码的batch_cand_emb，prev_decode_context保持不变
+                '''
                 batch_cand_emb, prev_decode_context = self.conduct_field_level_reasoning(
                     event_idx, field_idx, prev_decode_context, batch_span_context
                 )
                 # prepare label for candidate spans
+                #batch_span_label[num_spans] one-hot label
                 batch_span_label = get_batch_span_label(
                     num_spans, cur_span_idx_set, batch_span_context.device
                 )
-                # calculate loss
+                '''
+                calculate loss
+                cur_field_cls_loss [1]
+                batch_span_logp [num_spans,2]
+                '''
                 cur_field_cls_loss, batch_span_logp = self.get_field_cls_info(
                     event_idx, field_idx, batch_cand_emb,
                     batch_span_label=batch_span_label, train_flag=True
@@ -386,6 +410,7 @@ class Doc2EDAGModel(nn.Module):
 
                     cur_path = prev_path + (span_idx, )
                     if self.config.use_path_mem:
+                        #cur_decode_context[num_spans+decode_spans, hidden_size]
                         cur_decode_context = torch.cat([prev_decode_context, span_context], dim=0)
                         prev_path2prev_decode_context[cur_path] = cur_decode_context
                     else:
@@ -396,17 +421,17 @@ class Doc2EDAGModel(nn.Module):
     def get_loss_on_doc(self, doc_token_emb, doc_sent_emb, doc_fea, doc_span_info):
         '''
 
-        :param doc_token_emb:
-        :param doc_sent_emb:
-        :param doc_fea:
-        :param doc_span_info:
-        :return:
+        :param doc_token_emb: [max_sent_num,sen_len,hidden_size]
+        :param doc_sent_emb: [max_sent_num,hidden_size] 加入句子位置向量信
+        :param doc_fea:字典比较多字段
+        :param doc_span_info:字典，包含比较多字段
+        :return:total_event_loss [1]
         '''
         '''
+        首先加入句子位置嵌入以及实体类型嵌入获取文章中所有mention向量
         采用transformer-2编码实体和句子之间的关系，并且同一mention在文章不同位置采用最大池化获取特征。
-        span_context_list：[num_mentions,hidden_size] num_mentions和span_mention_range_list长度一致，指的是唯一标识的mention。
+        span_context_list：[num_spans,hidden_size] num_mentions和span_mention_range_list长度一致，指的是唯一标识的mention。
         doc_sent_context: [sent_num,hidden_size]
-        
         '''
         span_context_list, doc_sent_context = self.get_doc_span_sent_context(
             doc_token_emb, doc_sent_emb, doc_fea, doc_span_info,
@@ -422,6 +447,7 @@ class Doc2EDAGModel(nn.Module):
         event_idx2field_idx2pre_path2cur_span_idx_set = doc_span_info.event_dag_info
 
         # 1. get event type classification loss 多标签分类
+        #[1]函数里面求sum
         event_cls_loss = self.get_event_cls_info(doc_sent_context, doc_fea, train_flag=True)
 
         # 2. for each event type, get field classification loss
@@ -441,26 +467,31 @@ class Doc2EDAGModel(nn.Module):
                     )
                     #batch_cand_emb size与batch_span_context一样
                     # prepare label for candidate spans
-                    # batch_cand_emb [num_mentions, hidden_size]
+                    # batch_cand_emb [num_spans, hidden_size]
+                    # batch_span_label [num_spans] one-hot label
                     batch_span_label = get_batch_span_label(
                         num_spans, set(), batch_span_context.device
                     )
                     # calculate the field loss
+                    #cur_field_cls_loss [1]
+                    #batch_span_logp [num_spans,2]
                     cur_field_cls_loss, batch_span_logp = self.get_field_cls_info(
                         event_idx, field_idx, batch_cand_emb,
                         batch_span_label=batch_span_label, train_flag=True
                     )
                     # update the memory tensor
+                    # span_context:[1,hidden_size]
                     span_context = self.event_tables[event_idx].field_queries[field_idx]
                     if self.config.use_path_mem:
                         prev_decode_context = torch.cat([prev_decode_context, span_context], dim=0)
 
                     all_field_loss_list.append(cur_field_cls_loss)
             else:
-                #field_idx2pre_path2cur_span_idx_set [field_nums,(pre_path:cur_span_idx_set)]
-                #doc_sent_context[sent_num, hidden_size]
+                #field_idx2pre_path2cur_span_idx_set  [field_nums,(pre_path:cur_span_idx_set)]
+                #doc_sent_context [sent_num, hidden_size]
                 #batch_span_context[num_spans, hidden_size]
                 field_idx2pre_path2cur_span_idx_set = event_idx2field_idx2pre_path2cur_span_idx_set[event_idx]
+                # 如果包含该事件，则获取事件角色所有loss
                 field_loss_list = self.get_field_mle_loss_list(
                     doc_sent_context, batch_span_context, event_idx, field_idx2pre_path2cur_span_idx_set,
                 )
@@ -623,8 +654,9 @@ class Doc2EDAGModel(nn.Module):
             if need_label_flag:
                 ner_token_labels.append(doc_token_labels_list[batch_idx])
 
-        # [ner_batch_size, norm_sent_len]
+        # [ner_batch_size, sent_len]
         ner_token_ids = torch.cat(ner_token_ids, dim=0)
+        # [ner_batch_size, sent_len]
         ner_token_masks = torch.cat(ner_token_masks, dim=0)
         if need_label_flag:
             ner_token_labels = torch.cat(ner_token_labels, dim=0)
@@ -634,7 +666,8 @@ class Doc2EDAGModel(nn.Module):
             ner_token_ids, ner_token_masks, label_ids=ner_token_labels,
             train_flag=train_flag, decode_flag=not use_gold_span,
         )
-        # ner_token_emb [batch_size*sent_num, sen_len,hidden_size]
+        # ner_token_emb [batch_size*sent_num, sen_len, hidden_size]
+        # ner_token_preds [batch_size*sent_num, sen_len]
 
         if use_gold_span:  # definitely use gold span info
             ner_token_types = ner_token_labels
@@ -676,30 +709,30 @@ class Doc2EDAGModel(nn.Module):
             else:
                 use_gold_span = False
 
-        # get doc token-level local context,采用ner编码获取句子内实体识别loss，以及获取句子向量加入句子位置特征
+        '''
+        get doc token-level local context
+        采用ner编码获取句子内实体识别loss，以及获取句子向量加入句子位置特征
+        '''
         doc_token_emb_list, doc_token_masks_list, doc_token_types_list, doc_sent_emb_list, doc_sent_loss_list = \
             self.get_local_context_info(
                 doc_batch_dict, train_flag=train_flag, use_gold_span=use_gold_span,
             )
         '''
-        doc_token_emb_list：
         doc_sent_emb_list：transformer-1编码之后的embedding
+        doc_token_emb_list [batch_size,max_sent_num,sen_len,hidden_size]
+        doc_token_masks_list [batch_size,max_sent_num,sen_len]
+        doc_token_types_list [batch_size,max_sent_num,sen_len] 训练随机选择真实标签还是预测标签，推理使用预测标签
+        doc_sent_emb_list [batch_size,max_sent_num,hidden_size]
+        doc_sent_loss_list [batch_size,max_sent_num]m  每个句子的ner_loss
         '''
-        # doc_token_emb_list [batch_size,max_sent_num,sen_len,hidden_size]
-        # doc_token_masks_list [batch_size,max_sent_num,sen_len]
-        # doc_token_types_list [batch_size,max_sent_num,sen_len] 训练随机选择真实标签还是预测标签，推理使用预测标签
-        # doc_sent_emb_list [batch_size,max_sent_num,hidden_size]
-        # doc_sent_loss_list [batch_size,max_sent_num]
-
         # get doc feature objects
         ex_idx_list = doc_batch_dict['ex_idx']
         doc_fea_list = [doc_features[ex_idx] for ex_idx in ex_idx_list]
 
         # get doc span-level info for event extraction
         doc_span_info_list = get_doc_span_info_list(doc_token_types_list, doc_fea_list, use_gold_span=use_gold_span)
-        # doc_span_info_list [batch_size,()]
         '''
-        doc_span_info_list：包含下列字段值
+        doc_span_info_list：包含下列字段值 [batch_size,(dict)]
         event_dag_info: 有向无环图事件信息表  span_id 为span_token_tup_list的id， span_id路径信息 event_idx -> field_idx -> pre_path -> cur_span_idx_set
         mention_drange_list: 文章所有mention的 (sent_idx span范围)
         mention_type_list: 文章所有mention的类别， 长度和 mention_drange_list一样
@@ -708,8 +741,11 @@ class Doc2EDAGModel(nn.Module):
         span_token_tup_list: mention 所对应的token_id， 长度同span_mention_range_list长度一样
         '''
         if train_flag:
-            doc_event_loss_list = []
+            doc_event_loss_list = [] #[batch_size]
             for batch_idx, ex_idx in enumerate(ex_idx_list):
+                '''
+                获取篇章级事件抽取事件类型损失，以及事件所有角色损失
+                '''
                 doc_event_loss_list.append(
                     self.get_loss_on_doc(
                         doc_token_emb_list[batch_idx],
